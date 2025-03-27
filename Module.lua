@@ -1017,15 +1017,32 @@ end
 
 -- //
 local PreviousPosition = nil
+local LockMode = AimingSettings.LockMode
 local AimingSelected = Aiming.Selected
+local AimingSettingsFOVSettings = AimingSettings.FOVSettings
+local AimingSettingsDeadzoneFOVSettings = AimingSettings.DeadzoneFOVSettings
+
+local GetPlayers = Utilities.GetPlayers
+local Character = Utilities.Character
+local IsIgnored = Ignored.IsIgnored
+local CalculateChance = Utilities.CalculateChance
+local CalculateVelocity = Utilities.CalculateVelocity
+local IsPartVisible = Utilities.IsPartVisible
+local GetCurrentCamera = workspace.CurrentCamera
+
+local TargetPart, ClosestPlayer, PartPosition, PartVelocity, PartOnScreen
+local Chance, ShortestDistance, LocalCharacter, Player, Character
+local TargetPartTemp, PartPositionTemp, PartPositionOnScreenTemp, Magnitude
 
 function Aiming.GetClosestToCursor(deltaTime)
-    local TargetPart, ClosestPlayer, PartPosition, PartVelocity, PartOnScreen
-    local Chance = Utilities.CalculateChance(AimingSettings.HitChance)
-    local ShortestDistance = FOVSettings.Enabled and circle.Radius or 1/0
-    ShortestDistance = FOVSettings.FollowSelected and 1/0 or ShortestDistance
+    TargetPart = nil
+    ClosestPlayer = nil
+    PartPosition = nil
+    PartVelocity = nil
+    PartOnScreen = nil
     
-    if not Chance or not AimingSettings.Enabled then
+    Chance = CalculateChance(AimingSettings.HitChance)
+    if (not Chance or not AimingSettings.Enabled) then
         AimingSelected.Instance = nil
         AimingSelected.Part = nil
         AimingSelected.Position = nil
@@ -1034,56 +1051,57 @@ function Aiming.GetClosestToCursor(deltaTime)
         AimingSelected.OnScreen = false
         return
     end
-    
-    local LocalCharacter = Utilities.Character(LocalPlayer)
+
+    LocalCharacter = Character(LocalPlayer)
     if not LocalCharacter then return end
-    
-    for _, Player in ipairs(Utilities.GetPlayers()) do
+
+    ShortestDistance = (AimingSettingsFOVSettings.Enabled and not AimingSettingsFOVSettings.FollowSelected) 
+        and circle.Radius or math.huge
+
+    for _, Player in pairs(GetPlayers()) do
         if LockMode.Enabled and LockMode.InternalEnabled and Player ~= LockMode.LockedPlayer then
             continue
         end
-        
-        local Character = Utilities.Character(Player)
-        if not Character or Ignored.IsIgnored(Player) then
+
+        Character = Character(Player)
+        if not Character or IsIgnored(Player) then
             continue
         end
-        
-        if AimingSettings.ForcefieldCheck and not Checks.Forcefield(Character, Player) then
-            continue
-        end
-        
+
         if AimingSettings.HealthCheck and not Checks.Health(Character, Player) then
             continue
         end
+
+        TargetPartTemp, PartPositionTemp, PartPositionOnScreenTemp, Magnitude = 
+            Aiming.GetClosestTargetPartToCursor(Character)
         
-        local TargetPartTemp, PartPositionTemp, PartPositionOnScreenTemp, Magnitude = Aiming.GetClosestTargetPartToCursor(Character)
-        
-        if not PartPositionOnScreenTemp or not TargetPartTemp or not Checks.Custom(Character, Player) then
+        if not (PartPositionOnScreenTemp and TargetPartTemp and Checks.Custom(Character, Player)) then
             continue
         end
-        
+
         if Magnitude > ShortestDistance then
             continue
         end
-        
-        if AimingSettings.VisibleCheck and not Utilities.IsPartVisible(TargetPartTemp, Character) then
+
+        if AimingSettings.VisibleCheck and not IsPartVisible(TargetPartTemp, Character) then
             continue
         end
-        
+
         ClosestPlayer = Player
         ShortestDistance = Magnitude
         TargetPart = TargetPartTemp
         PartPosition = PartPositionTemp
         PartOnScreen = PartPositionOnScreenTemp
-        
+
         if PreviousPosition then
-            PartVelocity = Utilities.CalculateVelocity(PreviousPosition, TargetPart.Position, deltaTime)
+            PartVelocity = CalculateVelocity(PreviousPosition, TargetPart.Position, deltaTime)
         end
         PreviousPosition = TargetPart.Position
     end
-    
-    AimingSettings.InternalEnabled = not (DeadzoneFOVSettings.Enabled and ShortestDistance <= deadzonecircle.Radius)
-    
+
+    AimingSettings.InternalEnabled = not (AimingSettingsDeadzoneFOVSettings.Enabled and 
+        ShortestDistance <= deadzonecircle.Radius)
+
     if AimingSelected.Instance ~= ClosestPlayer then
         Aiming.Signals:Fire("InstanceChanged", ClosestPlayer)
     end
@@ -1098,108 +1116,87 @@ function Aiming.GetClosestToCursor(deltaTime)
     if AimingSelected.OnScreen ~= PartOnScreen then
         Aiming.Signals:Fire("OnScreenChanged", PartOnScreen)
     end
-    
+
     AimingSelected.Instance = ClosestPlayer
     AimingSelected.Part = TargetPart
     AimingSelected.Position = PartPosition
     AimingSelected.Velocity = PartVelocity
     AimingSelected.OnScreen = PartOnScreen
-    
+
     if LockMode.Enabled and ClosestPlayer and not LockMode.InternalEnabled then
         LockMode.InternalEnabled = true
         LockMode.LockedPlayer = ClosestPlayer
     end
 end
 
---//
-Aiming.BeizerCurve = {}
+Aiming.BeizerCurve = {
+    ManagerA = BeizerManager.new(),
+    ManagerB = BeizerManager.new()
+}
+
 do
-    local ManagerA = BeizerManager.new()
-    local ManagerB = BeizerManager.new()
-    
-    Aiming.BeizerCurve.ManagerA = ManagerA
-    Aiming.BeizerCurve.ManagerB = ManagerB
-    
+    local ManagerA = Aiming.BeizerCurve.ManagerA
+    local ManagerB = Aiming.BeizerCurve.ManagerB
+
     local function Offset()
         return AimingSettings.Offset
     end
+    
     ManagerA.Offset = Offset
     ManagerB.Offset = Offset
-    
-    Aiming.BeizerCurve.AimTo = function(...)
+
+    function Aiming.BeizerCurve.AimTo(...)
         ManagerA:ChangeData(...)
     end
-    Aiming.BeizerCurve.AimToB = function(...)
+    
+    function Aiming.BeizerCurve.AimToB(...)
         ManagerB:ChangeData(...)
     end
-    
+
     ManagerB:CameraMode()
     ManagerB.Function = function(self, Pitch, Yaw)
         local RotationMatrix = CFrame.fromEulerAnglesYXZ(Pitch, Yaw, 0)
-        Utilities.SetCameraCFrame(CFrame.new(GetCurrentCamera().CFrame.Position) * RotationMatrix)
+        Utilities.SetCameraCFrame(CFrame.new(GetCurrentCamera.CFrame.Position) * RotationMatrix)
     end
-    
+
     ManagerA:Start()
     ManagerB:Start()
 end
 
---//
-local lastUpdate = 0
+local lastFriendsUpdate = 0
 Heartbeat:Connect(function(deltaTime)
     Aiming.UpdateFOV()
     Aiming.UpdateDeadzoneFOV()
     Aiming.UpdateTracer()
     Aiming.GetClosestToCursor(deltaTime)
     Aiming.Loaded = true
+    
+    lastFriendsUpdate = lastFriendsUpdate + deltaTime
+    if lastFriendsUpdate >= 10 then
+        Aiming.Utilities.UpdateFriends()
+        lastFriendsUpdate = 0
+    end
 end)
 
---//
 KeybindHandler.CreateBind({
     Keybind = function() return LockMode.UnlockBind end,
     ProcessedCheck = true,
     State = LockMode.InternalEnabled,
-    Callback = function(State)
+    Callback = function()
         LockMode.InternalEnabled = false
         LockMode.LockedPlayer = nil
     end,
     Hold = false
 })
 
---//
-local lastFriendsUpdate = 0
-local Friends = {}
-local function UpdateFriends()
-    if os.clock() - lastFriendsUpdate < 10 then return end
-    lastFriendsUpdate = os.clock()
-    
-    local newFriends = {}
-    for _, Player in ipairs(Players:GetPlayers()) do
-        if Player ~= LocalPlayer and LocalPlayer:IsFriendsWith(Player.UserId) then
-            tableinsert(newFriends, Player)
-        end
-    end
-    Friends = newFriends
+if Aiming.ShowCredits then
+    task.delay(1, function()
+        messagebox("Orpios Killer Loaded)", "Credits", 0)
+    end)
 end
 
-Players.PlayerAdded:Connect(function(Player)
-    if LocalPlayer:IsFriendsWith(Player.UserId) then
-        tableinsert(Friends, Player)
-    end
-end)
-
-Players.PlayerRemoving:Connect(function(Player)
-    local i = tablefind(Friends, Player)
-    if i then
-        tableremove(Friends, i)
-    end
-end)
-
---//
-task.delay(1, function()
-    if Aiming.ShowCredits then
-        messagebox("Orpios Killer Loaded)", "Credits", 0)
-    end
-end)
-
 return Aiming
+
+                
 -- // If you want the examples, look at the docs.
+
