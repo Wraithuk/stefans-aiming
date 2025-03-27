@@ -1052,7 +1052,7 @@ function Aiming.GetClosestToCursor(deltaTime)
         return
     end
 
-    LocalCharacter = Character(LocalPlayer)
+    LocalCharacter = Utilities.Character(LocalPlayer)
     if not LocalCharacter then return end
 
     ShortestDistance = (AimingSettingsFOVSettings.Enabled and not AimingSettingsFOVSettings.FollowSelected) 
