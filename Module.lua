@@ -1021,182 +1021,213 @@ local LockMode = AimingSettings.LockMode
 local AimingSelected = Aiming.Selected
 local AimingSettingsFOVSettings = AimingSettings.FOVSettings
 local AimingSettingsDeadzoneFOVSettings = AimingSettings.DeadzoneFOVSettings
-
-local GetPlayers = Utilities.GetPlayers
-local Character = Utilities.Character
-local IsIgnored = Ignored.IsIgnored
-local CalculateChance = Utilities.CalculateChance
-local CalculateVelocity = Utilities.CalculateVelocity
-local IsPartVisible = Utilities.IsPartVisible
-local GetCurrentCamera = workspace.CurrentCamera
-
-local TargetPart, ClosestPlayer, PartPosition, PartVelocity, PartOnScreen
-local Chance, ShortestDistance, LocalCharacter, Player, Character
-local TargetPartTemp, PartPositionTemp, PartPositionOnScreenTemp, Magnitude
-
 function Aiming.GetClosestToCursor(deltaTime)
-    TargetPart = nil
-    ClosestPlayer = nil
-    PartPosition = nil
-    PartVelocity = nil
-    PartOnScreen = nil
-    
-    Chance = CalculateChance(AimingSettings.HitChance)
+    -- // Vars
+    local TargetPart = nil
+    local ClosestPlayer = nil
+    local PartPosition = nil
+    local PartVelocity = nil
+    local PartOnScreen = nil
+    local Chance = Utilities.CalculateChance(AimingSettings.HitChance)
+    local ShortestDistance = AimingSettingsFOVSettings.Enabled and circle.Radius or 1/0
+    ShortestDistance = AimingSettingsFOVSettings.FollowSelected and 1/0 or ShortestDistance
+
+    -- // See if it passed the chance or is not enabled
     if (not Chance or not AimingSettings.Enabled) then
+        -- // Set
         AimingSelected.Instance = nil
         AimingSelected.Part = nil
         AimingSelected.Position = nil
         PreviousPosition = nil
         AimingSelected.Velocity = nil
         AimingSelected.OnScreen = false
+
+        -- // Return
         return
     end
 
-    LocalCharacter = Utilities.Character(LocalPlayer)
-    if not LocalCharacter then return end
+    -- // Ensure we can get our own character
+    local LocalCharacter = Utilities.Character(LocalPlayer)
 
-    ShortestDistance = (AimingSettingsFOVSettings.Enabled and not AimingSettingsFOVSettings.FollowSelected) 
-        and circle.Radius or math.huge
+    -- // Loop through all players
+    for _, Player in pairs(Utilities.GetPlayers()) do
+        -- // Check our local character
+        if (not LocalCharacter) then
+            break
+        end
 
-    for _, Player in pairs(GetPlayers()) do
-        if LockMode.Enabled and LockMode.InternalEnabled and Player ~= LockMode.LockedPlayer then
+        -- // Check
+        if (LockMode.Enabled and LockMode.InternalEnabled and Player ~= LockMode.LockedPlayer) then
             continue
         end
 
-        Character = Character(Player)
-        if not Character or IsIgnored(Player) then
+        -- // Get Character
+        local Character = Utilities.Character(Player)
+
+        -- // Make sure isn't ignored and Character exists
+        if (not Character or Ignored.IsIgnored(Player)) then
             continue
         end
 
-        if AimingSettings.HealthCheck and not Checks.Health(Character, Player) then
+        -- // Checks, seperate for ultimate efficiency
+        if (AimingSettings.ForcefieldCheck and not Checks.Forcefield(Character, Player)) then
             continue
         end
 
-        TargetPartTemp, PartPositionTemp, PartPositionOnScreenTemp, Magnitude = 
-            Aiming.GetClosestTargetPartToCursor(Character)
-        
-        if not (PartPositionOnScreenTemp and TargetPartTemp and Checks.Custom(Character, Player)) then
+        if (AimingSettings.HealthCheck and not Checks.Health(Character, Player)) then
             continue
         end
 
-        if Magnitude > ShortestDistance then
+        -- // Vars
+        local TargetPartTemp, PartPositionTemp, PartPositionOnScreenTemp, Magnitude = Aiming.GetClosestTargetPartToCursor(Character)
+
+        -- // Check if part exists, and custom. PartPositionOnScreenTemp IS ALWAYS TRUE, KEPT IN FOR REDUDANCY SAKE - MAY REMOVE LATER
+        if (not PartPositionOnScreenTemp or not TargetPartTemp or not Checks.Custom(Character, Player)) then
             continue
         end
 
-        if AimingSettings.VisibleCheck and not IsPartVisible(TargetPartTemp, Character) then
+        -- // Check if is in FOV
+        if (Magnitude > ShortestDistance) then
             continue
         end
 
+        -- // Check if Visible
+        if (AimingSettings.VisibleCheck and not Utilities.IsPartVisible(TargetPartTemp, Character)) then
+            continue
+        end
+
+        -- // Set vars
         ClosestPlayer = Player
         ShortestDistance = Magnitude
         TargetPart = TargetPartTemp
         PartPosition = PartPositionTemp
         PartOnScreen = PartPositionOnScreenTemp
 
-        if PreviousPosition then
-            PartVelocity = CalculateVelocity(PreviousPosition, TargetPart.Position, deltaTime)
+        -- // Velocity calculations
+        if (not PreviousPosition) then
+            PreviousPosition = TargetPart.Position
         end
+        PartVelocity = Utilities.CalculateVelocity(PreviousPosition, TargetPart.Position, deltaTime)
         PreviousPosition = TargetPart.Position
     end
 
-    AimingSettings.InternalEnabled = not (AimingSettingsDeadzoneFOVSettings.Enabled and 
-        ShortestDistance <= deadzonecircle.Radius)
+    -- // Check if within deadzone
+    AimingSettings.InternalEnabled = not (AimingSettingsDeadzoneFOVSettings.Enabled and ShortestDistance <= deadzonecircle.Radius)
 
-    if AimingSelected.Instance ~= ClosestPlayer then
+    -- // Firing changed signals
+    if (AimingSelected.Instance ~= ClosestPlayer) then
         Aiming.Signals:Fire("InstanceChanged", ClosestPlayer)
     end
-    if AimingSelected.Part ~= TargetPart then
+    if (AimingSelected.Part ~= TargetPart) then
         AimingSelected.Velocity = nil
         PreviousPosition = nil
         Aiming.Signals:Fire("PartChanged", TargetPart)
     end
-    if AimingSelected.Position ~= PartPosition then
+    if (AimingSelected.Position ~= PartPosition) then
         Aiming.Signals:Fire("PartPositionChanged", PartPosition)
     end
-    if AimingSelected.OnScreen ~= PartOnScreen then
+    if (AimingSelected.OnScreen ~= PartOnScreen) then
         Aiming.Signals:Fire("OnScreenChanged", PartOnScreen)
     end
 
+    -- // End
     AimingSelected.Instance = ClosestPlayer
     AimingSelected.Part = TargetPart
     AimingSelected.Position = PartPosition
     AimingSelected.Velocity = PartVelocity
     AimingSelected.OnScreen = PartOnScreen
 
-    if LockMode.Enabled and ClosestPlayer and not LockMode.InternalEnabled then
+    -- // Check
+    if (LockMode.Enabled and ClosestPlayer and not LockMode.InternalEnabled) then
         LockMode.InternalEnabled = true
         LockMode.LockedPlayer = ClosestPlayer
     end
 end
 
-Aiming.BeizerCurve = {
-    ManagerA = BeizerManager.new(),
-    ManagerB = BeizerManager.new()
-}
-
+-- // Beizer Aim Curves
+Aiming.BeizerCurve = {}
 do
-    local ManagerA = Aiming.BeizerCurve.ManagerA
-    local ManagerB = Aiming.BeizerCurve.ManagerB
+    -- // Information
+    --[[
+        A deals with mouse movements
+        B deals with custom movements, e.g. camera
+    ]]
+
+    -- // Vars
+    local ManagerA = BeizerManager.new()
+    local ManagerB = BeizerManager.new()
+
+    -- // Functions
+    Aiming.BeizerCurve.ManagerA = ManagerA
+    Aiming.BeizerCurve.ManagerB = ManagerB
 
     local function Offset()
         return AimingSettings.Offset
     end
-    
     ManagerA.Offset = Offset
     ManagerB.Offset = Offset
 
-    function Aiming.BeizerCurve.AimTo(...)
+    Aiming.BeizerCurve.AimTo = function(...)
         ManagerA:ChangeData(...)
     end
-    
-    function Aiming.BeizerCurve.AimToB(...)
+    Aiming.BeizerCurve.AimToB = function(...)
         ManagerB:ChangeData(...)
     end
 
+    -- // Convert B to Camera Mode
     ManagerB:CameraMode()
+
+    -- // Convert function to use Aiming
     ManagerB.Function = function(self, Pitch, Yaw)
         local RotationMatrix = CFrame.fromEulerAnglesYXZ(Pitch, Yaw, 0)
-        Utilities.SetCameraCFrame(CFrame.new(GetCurrentCamera.CFrame.Position) * RotationMatrix)
+        Utilities.SetCameraCFrame(CFrame.new(GetCurrentCamera().CFrame.Position) * RotationMatrix)
     end
 
+    -- // Start
     ManagerA:Start()
     ManagerB:Start()
 end
 
-local lastFriendsUpdate = 0
+-- // Heartbeat Function
 Heartbeat:Connect(function(deltaTime)
     Aiming.UpdateFOV()
     Aiming.UpdateDeadzoneFOV()
     Aiming.UpdateTracer()
     Aiming.GetClosestToCursor(deltaTime)
+
     Aiming.Loaded = true
-    
-    lastFriendsUpdate = lastFriendsUpdate + deltaTime
-    if lastFriendsUpdate >= 10 then
-        Aiming.Utilities.UpdateFriends()
-        lastFriendsUpdate = 0
-    end
 end)
 
+-- //
 KeybindHandler.CreateBind({
     Keybind = function() return LockMode.UnlockBind end,
     ProcessedCheck = true,
     State = LockMode.InternalEnabled,
-    Callback = function()
+    Callback = function(State)
         LockMode.InternalEnabled = false
         LockMode.LockedPlayer = nil
     end,
     Hold = false
 })
 
-if Aiming.ShowCredits then
-    task.delay(1, function()
-        messagebox("Orpios Killer Loaded)", "Credits", 0)
-    end)
-end
+-- // Other stuff
+task.spawn(function()
+    -- // Repeat every secodn
+    while true do wait(10)
+        -- // Update the friends list
+        Aiming.Utilities.UpdateFriends()
+    end
+end)
 
+-- // Credits
+task.delay(1, function()
+    -- // Credits (by disabling this and not including your own way of crediting within the script, e.g. credits tab, is violating the license agreement. Beware!)
+    if (Aiming.ShowCredits) then
+        messagebox("Orpios Killer Loaded)", "Credits", 0)
+    end
+end)
+
+-- //
 return Aiming
 
-                
 -- // If you want the examples, look at the docs.
-
